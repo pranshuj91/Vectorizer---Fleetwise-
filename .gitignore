@@ -1,0 +1,28 @@
+# Python / venv
+venv/
+.venv/
+env/
+*.pyc
+__pycache__/
+
+# IDE / editor
+.vscode/
+.idea/
+.history/
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Python tooling
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Data directories (optional to ignore large generated artifacts)
+data/uploads/
+data/texts/
+data/chunks/
+data/vectors/
+
+
