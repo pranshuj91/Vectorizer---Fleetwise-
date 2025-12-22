@@ -85,18 +85,32 @@ class EmbeddingService:
         """
         return self._index is not None and self._index.ntotal > 0
 
-    def add_documents(self, chunks: List[str], file_name: str) -> None:
+    def add_documents(self, chunks: List[Dict[str, Any]], file_name: str) -> None:
         """
-        Add a list of text chunks for a given file to the index.
+        Add a list of semantic chunks for a given file to the index.
 
-        :param chunks: List of text chunks to embed.
-        :param file_name: Name of the originating file.
+        Each chunk is expected to have at least:
+        - chunk_id: int
+        - section: str
+        - text: str
+
+        The embedding input text is prefixed with rich metadata to make
+        downstream retrieval more RAG-friendly.
         """
         if not chunks:
             return
 
         model = self._load_model()
-        embeddings = model.encode(chunks, convert_to_numpy=True, show_progress_bar=False)
+
+        prepared_texts: List[str] = []
+        for chunk in chunks:
+            section_title = str(chunk.get("section", "Untitled"))
+            text = str(chunk.get("text", ""))
+
+            prefixed = f"Section: {section_title}\nDocument: {file_name}\n\n{text}"
+            prepared_texts.append(prefixed)
+
+        embeddings = model.encode(prepared_texts, convert_to_numpy=True, show_progress_bar=False)
 
         # Normalize embeddings to unit vectors
         embeddings = embeddings.astype("float32")
@@ -109,13 +123,14 @@ class EmbeddingService:
 
         self._index.add(embeddings)
 
-        for idx, chunk_text in enumerate(chunks):
+        for idx, chunk in enumerate(chunks):
             self._metadata.append(
                 {
                     "id": start_id + idx,
                     "file_name": file_name,
-                    "chunk_index": idx,
-                    "text": chunk_text,
+                    "chunk_index": int(chunk.get("chunk_id", idx)),
+                    "section": chunk.get("section", "Untitled"),
+                    "text": chunk.get("text", ""),
                 }
             )
 
@@ -153,6 +168,9 @@ class EmbeddingService:
                     "score": float(score),
                     "file_name": meta["file_name"],
                     "chunk_index": meta["chunk_index"],
+                    "section": meta.get("section"),
+                    "page_start": meta.get("page_start"),
+                    "page_end": meta.get("page_end"),
                     "text": meta["text"],
                 }
             )
