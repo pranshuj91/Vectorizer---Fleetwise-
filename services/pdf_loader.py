@@ -50,7 +50,7 @@ async def save_upload_file(
             bytes_written += len(chunk)
             if bytes_written > max_size_bytes:
                 destination.unlink(missing_ok=True)
-                raise ValueError("File exceeds maximum allowed size of 500MB.")
+                raise ValueError("File exceeds maximum allowed size.")
             out_file.write(chunk)
 
     await upload_file.close()

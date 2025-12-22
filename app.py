@@ -5,7 +5,8 @@ from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from fastapi.templating import Jinja2Templates
 
 from services.pdf_loader import save_upload_file, extract_text_from_pdf
-from services.text_chunker import chunk_text_file
+from services.text_reconstructor import reconstruct_text, save_reconstructed_document
+from services.semantic_chunker import build_semantic_chunks, save_chunks_jsonl
 from services.embedder import EmbeddingService
 
 
@@ -13,6 +14,7 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 UPLOAD_DIR = DATA_DIR / "uploads"
 TEXT_DIR = DATA_DIR / "texts"
+RECONSTRUCTED_DIR = DATA_DIR / "reconstructed"
 CHUNKS_DIR = DATA_DIR / "chunks"
 VECTORS_DIR = DATA_DIR / "vectors"
 
@@ -25,7 +27,7 @@ def ensure_directories() -> None:
     """
     Ensure that all required data directories exist.
     """
-    for d in (UPLOAD_DIR, TEXT_DIR, CHUNKS_DIR, VECTORS_DIR):
+    for d in (UPLOAD_DIR, TEXT_DIR, RECONSTRUCTED_DIR, CHUNKS_DIR, VECTORS_DIR):
         d.mkdir(parents=True, exist_ok=True)
 
 
@@ -82,23 +84,38 @@ async def upload_pdf(
     # reused for text, chunks, and vector metadata.
     file_id = saved_pdf_path.stem
 
-    # Extract text from PDF page-by-page into a UTF-8 text file. Page order is
-    # preserved because pages are processed sequentially.
+    # Extract raw text from PDF page-by-page into a UTF-8 text file. Page order
+    # is preserved because pages are processed sequentially. This raw text file
+    # is useful for debugging and external tooling.
     text_output_path = TEXT_DIR / f"{file_id}.txt"
     try:
         num_pages = extract_text_from_pdf(saved_pdf_path, text_output_path)
     except Exception as exc:  # pragma: no cover - defensive
         raise HTTPException(status_code=500, detail="Failed to extract text from PDF.") from exc
 
-    # Chunk text into 500-700 "token" chunks (approximate tokens by words) and
-    # persist them as JSONL for later inspection/download.
+    # PHASE 1: Semantic text reconstruction. Fix line-wrapped sentences,
+    # normalize paragraphs, and tag headings/paragraphs structurally.
+    with text_output_path.open("r", encoding="utf-8") as f:
+        raw_text = f.read()
+
+    sections = reconstruct_text(raw_text)
+
+    # Persist reconstructed sections for inspection. This file contains the
+    # repaired, section-based document structure.
+    reconstructed_output_path = RECONSTRUCTED_DIR / f"{file_id}.json"
+    save_reconstructed_document(sections, str(reconstructed_output_path))
+
+    # PHASE 2: Semantic chunking. Create RAG-ready chunks that stay within
+    # a section, are paragraph-aligned, and maintain a small overlap.
+    # Convert sections into the format expected by the chunker.
+    chunker_sections = [
+        {"section_title": s["title"], "content": s.get("paragraphs", [])} for s in sections
+    ]
+    chunks = build_semantic_chunks(chunker_sections, target_tokens=400, overlap_ratio=0.15)
+
+    # Persist chunks as JSONL for later inspection/download.
     chunks_jsonl_path = CHUNKS_DIR / f"{file_id}.jsonl"
-    chunks = chunk_text_file(
-        text_file_path=text_output_path,
-        target_chunk_size_tokens=600,
-        overlap_tokens=50,
-        jsonl_output_path=chunks_jsonl_path,
-    )
+    save_chunks_jsonl(chunks, chunks_jsonl_path)
 
     if not chunks:
         return JSONResponse(
@@ -187,6 +204,55 @@ async def download_chunks(file_id: str):
         media_type="application/json",
         filename=chunks_path.name,
     )
+
+
+@app.get("/download/structured/{file_id}")
+async def download_structured(file_id: str):
+    """
+    Download the structured JSON representation for a given file identifier.
+    """
+    structured_path = STRUCTURED_DIR / f"{file_id}.json"
+    if not structured_path.exists():
+        raise HTTPException(status_code=404, detail="Structured document not found.")
+
+    return FileResponse(
+        structured_path,
+        media_type="application/json",
+        filename=structured_path.name,
+    )
+
+
+@app.get("/preview/chunks/{file_id}")
+async def preview_chunks(file_id: str, limit: int = 10):
+    """
+    Return the first N semantic chunks for quick inspection.
+
+    Chunks are read from the JSONL file on disk without loading the entire file
+    into memory, which keeps this endpoint safe for very large documents.
+    """
+    if limit <= 0:
+        raise HTTPException(status_code=400, detail="limit must be positive.")
+
+    chunks_path = CHUNKS_DIR / f"{file_id}.jsonl"
+    if not chunks_path.exists():
+        raise HTTPException(status_code=404, detail="Chunks file not found.")
+
+    import json
+
+    results = []
+    with chunks_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                results.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+            if len(results) >= limit:
+                break
+
+    return {"file_id": file_id, "limit": limit, "chunks": results}
 
 
 if __name__ == "__main__":  # pragma: no cover
