@@ -183,14 +183,14 @@
 <body>
     <div class="container">
         <h1>PDF Vectorizer</h1>
-        <p class="subtitle">Upload a PDF (max 1GB). The server will extract text, build embeddings, and store vectors for search.</p>
+        <p class="subtitle">Upload a PDF, JSON, CSV, or Excel file (max 1GB). The server will extract text, build embeddings, and store vectors for search.</p>
 
         <form id="upload-form">
             <div class="upload-area">
                 <label class="upload-label" for="file-input">
-                    <span>Select a PDF</span>
+                    <span>Select a file</span>
                 </label>
-                <input id="file-input" type="file" name="file" accept="application/pdf" />
+                <input id="file-input" type="file" name="file" accept=".pdf,.json,.csv,.xls,.xlsx" />
                 <div class="file-name" id="file-name">No file selected</div>
             </div>
             <button type="submit" id="upload-btn" disabled>Upload &amp; Process PDF</button>
