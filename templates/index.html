@@ -235,6 +235,8 @@
         const searchResultsEl = document.getElementById("search-results");
 
         let currentFileId = null;
+        let rawDownloadUrl = null;
+        let chunksDownloadUrl = null;
 
         fileInput.addEventListener("change", () => {
             if (fileInput.files.length > 0) {
@@ -264,6 +266,8 @@
             metaEl.textContent = "";
             downloadsEl.style.display = "none";
             currentFileId = null;
+            rawDownloadUrl = null;
+            chunksDownloadUrl = null;
             progressInner.style.width = "0%";
             uploadBtn.disabled = true;
 
@@ -296,7 +300,22 @@
                             if (data.file_id) {
                                 currentFileId = data.file_id;
                                 fileIdLabelEl.textContent = `file_id: ${data.file_id}`;
-                                downloadsEl.style.display = "flex";
+
+                                // Use backend-provided URLs and existence flags when available.
+                                rawDownloadUrl = data.raw_download_url || null;
+                                chunksDownloadUrl = data.chunks_download_url || null;
+
+                                const rawExists = data.raw_exists === true;
+                                const chunksExist = data.chunks_exist === true;
+
+                                btnDownloadText.disabled = !rawExists || !rawDownloadUrl;
+                                btnDownloadChunks.disabled = !chunksExist || !chunksDownloadUrl;
+
+                                if (rawExists || chunksExist) {
+                                    downloadsEl.style.display = "flex";
+                                } else {
+                                    downloadsEl.style.display = "none";
+                                }
                             }
                         } else {
                             statusEl.textContent = "Unexpected response from server.";
@@ -327,13 +346,15 @@
         });
 
         btnDownloadText.addEventListener("click", () => {
-            if (!currentFileId) return;
-            window.open(`/download/text/${encodeURIComponent(currentFileId)}`, "_blank");
+            if (!rawDownloadUrl) return;
+            console.log("Opening raw download URL:", rawDownloadUrl);
+            window.open(rawDownloadUrl, "_blank");
         });
 
         btnDownloadChunks.addEventListener("click", () => {
-            if (!currentFileId) return;
-            window.open(`/download/chunks/${encodeURIComponent(currentFileId)}`, "_blank");
+            if (!chunksDownloadUrl) return;
+            console.log("Opening chunks download URL:", chunksDownloadUrl);
+            window.open(chunksDownloadUrl, "_blank");
         });
 
         searchBtn.addEventListener("click", () => {
