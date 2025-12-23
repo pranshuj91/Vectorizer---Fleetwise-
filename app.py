@@ -15,6 +15,7 @@ from services.embedder import EmbeddingService
 from services.json_extractor import extract_json_blocks
 from services.csv_extractor import extract_csv_blocks
 from services.excel_extractor import extract_excel_blocks
+from services.vector_ingestion import ingest_chunks_to_supabase
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -256,6 +257,14 @@ async def upload_pdf(
         embedding_service.add_documents(chunks=chunks, file_name=saved_pdf_path.name)
     except Exception as exc:  # pragma: no cover - defensive
         raise HTTPException(status_code=500, detail="Failed to generate embeddings.") from exc
+
+    # Additionally ingest vectors into Supabase pgvector using the configured
+    # external embedding provider (if any). Failures here are logged but do not
+    # affect the primary PDF pipeline.
+    try:
+        ingest_chunks_to_supabase(chunks=chunks, file_id=file_id, file_name=saved_pdf_path.name)
+    except Exception as exc:  # pragma: no cover - defensive
+        logging.warning("Supabase vector ingestion failed: %s", exc)
 
     return JSONResponse(
         {
