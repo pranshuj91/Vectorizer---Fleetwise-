@@ -1,4 +1,6 @@
 from pathlib import Path
+import uuid
+import json
 
 from fastapi import FastAPI, File, UploadFile, HTTPException, Request
 from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
@@ -8,6 +10,9 @@ from services.pdf_loader import save_upload_file, extract_text_from_pdf
 from services.text_reconstructor import reconstruct_text, save_reconstructed_document
 from services.semantic_chunker import build_semantic_chunks, save_chunks_jsonl
 from services.embedder import EmbeddingService
+from services.json_extractor import extract_json_blocks
+from services.csv_extractor import extract_csv_blocks
+from services.excel_extractor import extract_excel_blocks
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -16,6 +21,7 @@ UPLOAD_DIR = DATA_DIR / "uploads"
 TEXT_DIR = DATA_DIR / "texts"
 RECONSTRUCTED_DIR = DATA_DIR / "reconstructed"
 CHUNKS_DIR = DATA_DIR / "chunks"
+NORMALIZED_DIR = DATA_DIR / "normalized"
 VECTORS_DIR = DATA_DIR / "vectors"
 
 # Maximum upload size: 1GB. The actual guard is implemented in save_upload_file
@@ -27,7 +33,7 @@ def ensure_directories() -> None:
     """
     Ensure that all required data directories exist.
     """
-    for d in (UPLOAD_DIR, TEXT_DIR, RECONSTRUCTED_DIR, CHUNKS_DIR, VECTORS_DIR):
+    for d in (UPLOAD_DIR, TEXT_DIR, RECONSTRUCTED_DIR, CHUNKS_DIR, NORMALIZED_DIR, VECTORS_DIR):
         d.mkdir(parents=True, exist_ok=True)
 
 
@@ -57,11 +63,62 @@ async def upload_pdf(
     file: UploadFile = File(..., description="PDF file to upload"),
 ):
     """
-    Upload a PDF, extract text, generate embeddings, and update FAISS index.
-    Returns basic metadata about the processed file.
+    Upload a file and route it to the appropriate ingestion pipeline.
+
+    - PDF files go through the existing PDF → text → semantic repair → chunking → embeddings flow.
+    - JSON/CSV/Excel files are normalized into semantic text blocks and written as JSONL.
     """
-    if not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only PDF files are allowed.")
+    filename = file.filename or ""
+    lower_name = filename.lower()
+
+    # Non-PDF ingestion path (kept completely separate from the PDF pipeline).
+    if not lower_name.endswith(".pdf"):
+        raw_bytes = await file.read()
+        if not raw_bytes:
+            raise HTTPException(status_code=400, detail="Empty file uploaded.")
+
+        file_id = f"{Path(filename).stem}_{uuid.uuid4().hex[:8]}"
+        normalized_path = NORMALIZED_DIR / f"{file_id}.jsonl"
+
+        if lower_name.endswith(".json"):
+            blocks = extract_json_blocks(raw_bytes, filename)
+        elif lower_name.endswith(".csv"):
+            blocks = extract_csv_blocks(raw_bytes, filename)
+        elif lower_name.endswith(".xls") or lower_name.endswith(".xlsx"):
+            blocks = extract_excel_blocks(raw_bytes, filename)
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Unsupported file type. Only PDF, JSON, CSV, and Excel are allowed.",
+            )
+
+        if not blocks:
+            return JSONResponse(
+                {
+                    "file_name": filename,
+                    "file_id": file_id,
+                    "source_type": "unknown",
+                    "number_of_blocks": 0,
+                    "status": "no_content",
+                }
+            )
+
+        normalized_path.parent.mkdir(parents=True, exist_ok=True)
+        with normalized_path.open("w", encoding="utf-8") as f:
+            for block in blocks:
+                f.write(json.dumps(block, ensure_ascii=False) + "\n")
+
+        return JSONResponse(
+            {
+                "file_name": filename,
+                "file_id": file_id,
+                "source_type": blocks[0]["source_type"],
+                "number_of_blocks": len(blocks),
+                "status": "ok",
+            }
+        )
+
+    # ---------------- PDF pipeline below: behavior unchanged ----------------
 
     if file.content_type not in ("application/pdf", "application/x-pdf"):
         # Strict content-type validation, but allow common variations
