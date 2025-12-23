@@ -1,6 +1,8 @@
 from pathlib import Path
 import uuid
 import json
+import logging
+import re
 
 from fastapi import FastAPI, File, UploadFile, HTTPException, Request
 from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
@@ -17,10 +19,15 @@ from services.excel_extractor import extract_excel_blocks
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
-UPLOAD_DIR = DATA_DIR / "uploads"
-TEXT_DIR = DATA_DIR / "texts"
+STORAGE_DIR = BASE_DIR / "storage"
+
+# PDF / text storage rooted under storage/
+UPLOAD_DIR = STORAGE_DIR / "uploads"
+TEXT_DIR = STORAGE_DIR / "raw_text"
+CHUNKS_DIR = STORAGE_DIR / "chunks"
+
+# Existing auxiliary dirs (kept for backward compatibility / non-PDF artifacts)
 RECONSTRUCTED_DIR = DATA_DIR / "reconstructed"
-CHUNKS_DIR = DATA_DIR / "chunks"
 NORMALIZED_DIR = DATA_DIR / "normalized"
 VECTORS_DIR = DATA_DIR / "vectors"
 
@@ -33,11 +40,26 @@ def ensure_directories() -> None:
     """
     Ensure that all required data directories exist.
     """
-    for d in (UPLOAD_DIR, TEXT_DIR, RECONSTRUCTED_DIR, CHUNKS_DIR, NORMALIZED_DIR, VECTORS_DIR):
+    for d in (UPLOAD_DIR, TEXT_DIR, CHUNKS_DIR, RECONSTRUCTED_DIR, NORMALIZED_DIR, VECTORS_DIR):
         d.mkdir(parents=True, exist_ok=True)
 
 
 ensure_directories()
+logging.basicConfig(level=logging.INFO)
+
+
+def make_safe_file_id(stem: str) -> str:
+    """
+    Generate a URL- and filesystem-safe file identifier from an original stem.
+
+    This avoids characters like spaces and '#' which can break URL routing
+    or be interpreted as URL fragments.
+    """
+    # Replace any character that is not alphanumeric, '-' or '_' with '_'
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", stem)
+    # Collapse consecutive underscores
+    safe = re.sub(r"_+", "_", safe).strip("_")
+    return safe or uuid.uuid4().hex
 
 # max_request_size ensures Starlette will accept large uploads up to 1GB.
 app = FastAPI(title="PDF Vectorizer", max_request_size=MAX_FILE_SIZE_BYTES)
@@ -77,7 +99,8 @@ async def upload_pdf(
         if not raw_bytes:
             raise HTTPException(status_code=400, detail="Empty file uploaded.")
 
-        file_id = f"{Path(filename).stem}_{uuid.uuid4().hex[:8]}"
+        safe_stem = make_safe_file_id(Path(filename).stem)
+        file_id = f"{safe_stem}_{uuid.uuid4().hex[:8]}"
         normalized_path = NORMALIZED_DIR / f"{file_id}.jsonl"
 
         if lower_name.endswith(".json"):
@@ -99,21 +122,44 @@ async def upload_pdf(
                     "file_id": file_id,
                     "source_type": "unknown",
                     "number_of_blocks": 0,
+                    "raw_exists": False,
+                    "chunks_exist": False,
+                    "raw_download_url": None,
+                    "chunks_download_url": None,
                     "status": "no_content",
                 }
             )
 
+        # Persist normalized JSONL blocks
         normalized_path.parent.mkdir(parents=True, exist_ok=True)
         with normalized_path.open("w", encoding="utf-8") as f:
             for block in blocks:
                 f.write(json.dumps(block, ensure_ascii=False) + "\n")
+        logging.info("Saved normalized blocks to %s", normalized_path)
 
+        # Additionally persist a plain-text version of the structured content so
+        # that /download/raw/{file_id} works consistently for non-PDF inputs.
+        text_output_path = TEXT_DIR / f"{file_id}.txt"
+        text_output_path.parent.mkdir(parents=True, exist_ok=True)
+        with text_output_path.open("w", encoding="utf-8") as f_txt:
+            for block in blocks:
+                f_txt.write(str(block.get("text", "")))
+                f_txt.write("\n\n")
+        logging.info("Saved non-PDF raw text to %s", text_output_path)
+
+        raw_exists = text_output_path.exists()
+        # We currently don't expose a "chunks" download for non-PDF inputs,
+        # so report chunks_exist as False and omit a chunks URL.
         return JSONResponse(
             {
                 "file_name": filename,
                 "file_id": file_id,
                 "source_type": blocks[0]["source_type"],
                 "number_of_blocks": len(blocks),
+                "raw_exists": raw_exists,
+                "chunks_exist": False,
+                "raw_download_url": f"/download/raw/{file_id}" if raw_exists else None,
+                "chunks_download_url": None,
                 "status": "ok",
             }
         )
@@ -137,9 +183,10 @@ async def upload_pdf(
     except Exception as exc:  # pragma: no cover - defensive
         raise HTTPException(status_code=500, detail="Failed to save uploaded file.") from exc
 
-    # Use the stem of the saved filename as a stable file identifier that is
-    # reused for text, chunks, and vector metadata.
-    file_id = saved_pdf_path.stem
+    # Use a sanitized version of the saved filename's stem as a stable file
+    # identifier that is reused for text, chunks, and download URLs.
+    file_id = make_safe_file_id(saved_pdf_path.stem)
+    logging.info("Saved uploaded PDF to %s with file_id=%s", saved_pdf_path, file_id)
 
     # Extract raw text from PDF page-by-page into a UTF-8 text file. Page order
     # is preserved because pages are processed sequentially. This raw text file
@@ -147,6 +194,7 @@ async def upload_pdf(
     text_output_path = TEXT_DIR / f"{file_id}.txt"
     try:
         num_pages = extract_text_from_pdf(saved_pdf_path, text_output_path)
+        logging.info("Saved raw text to %s", text_output_path)
     except Exception as exc:  # pragma: no cover - defensive
         raise HTTPException(status_code=500, detail="Failed to extract text from PDF.") from exc
 
@@ -170,9 +218,23 @@ async def upload_pdf(
     ]
     chunks = build_semantic_chunks(chunker_sections, target_tokens=400, overlap_ratio=0.15)
 
-    # Persist chunks as JSONL for later inspection/download.
-    chunks_jsonl_path = CHUNKS_DIR / f"{file_id}.jsonl"
-    save_chunks_jsonl(chunks, chunks_jsonl_path)
+    # Persist chunks as JSON to disk for download / inspection.
+    chunks_path = CHUNKS_DIR / f"{file_id}.json"
+    chunks_path.parent.mkdir(parents=True, exist_ok=True)
+    with chunks_path.open("w", encoding="utf-8") as f:
+        json.dump(chunks, f, ensure_ascii=False, indent=2)
+    logging.info("Saved chunks to %s", chunks_path)
+
+    # Verify that raw text and chunks files exist; if not, fail fast so the UI
+    # does not expose download buttons for missing artifacts.
+    raw_text_exists = text_output_path.exists()
+    chunks_exists = chunks_path.exists()
+
+    if not raw_text_exists or not chunks_exists:
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error: failed to persist raw text or chunks to disk.",
+        )
 
     if not chunks:
         return JSONResponse(
@@ -181,6 +243,10 @@ async def upload_pdf(
                 "file_id": file_id,
                 "number_of_pages": num_pages,
                 "number_of_chunks": 0,
+                "raw_exists": raw_text_exists,
+                "chunks_exist": chunks_exists,
+                "raw_download_url": f"/download/raw/{file_id}",
+                "chunks_download_url": f"/download/chunks/{file_id}",
                 "status": "no_text_found",
             }
         )
@@ -197,6 +263,10 @@ async def upload_pdf(
             "file_id": file_id,
             "number_of_pages": num_pages,
             "number_of_chunks": len(chunks),
+            "raw_exists": raw_text_exists,
+            "chunks_exist": chunks_exists,
+            "raw_download_url": f"/download/raw/{file_id}",
+            "chunks_download_url": f"/download/chunks/{file_id}",
             "status": "ok",
         }
     )
@@ -224,7 +294,7 @@ async def search_documents(query: str, top_k: int = 5):
     return {"results": results, "status": "ok"}
 
 
-@app.get("/download/text/{file_id}")
+@app.get("/download/raw/{file_id}")
 async def download_raw_text(file_id: str):
     """
     Download the raw extracted text for a given file identifier.
@@ -234,13 +304,10 @@ async def download_raw_text(file_id: str):
     """
     text_path = TEXT_DIR / f"{file_id}.txt"
     if not text_path.exists():
+        logging.warning("Raw text download requested but file missing: %s", text_path)
         raise HTTPException(status_code=404, detail="Text file not found.")
 
-    return FileResponse(
-        text_path,
-        media_type="text/plain; charset=utf-8",
-        filename=text_path.name,
-    )
+    return FileResponse(text_path, media_type="text/plain; charset=utf-8", filename=text_path.name)
 
 
 @app.get("/download/chunks/{file_id}")
@@ -251,11 +318,12 @@ async def download_chunks(file_id: str):
     Uses FileResponse so very large files (hundreds of MB or more) are streamed
     directly from disk.
     """
-    chunks_path = CHUNKS_DIR / f"{file_id}.jsonl"
+    chunks_path = CHUNKS_DIR / f"{file_id}.json"
+    logging.info("Chunks download requested for %s", chunks_path)
     if not chunks_path.exists():
+        logging.warning("Chunks download requested but file missing: %s", chunks_path)
         raise HTTPException(status_code=404, detail="Chunks file not found.")
 
-    # application/jsonl is non-standard; application/json is widely supported.
     return FileResponse(
         chunks_path,
         media_type="application/json",
