@@ -1,9 +1,11 @@
 from pathlib import Path
+import os
 import uuid
 import json
 import logging
 import re
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, File, UploadFile, HTTPException, Request
 from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from fastapi.templating import Jinja2Templates
@@ -45,8 +47,24 @@ def ensure_directories() -> None:
         d.mkdir(parents=True, exist_ok=True)
 
 
-ensure_directories()
+# Load .env from an absolute path and log basic configuration visibility.
+ENV_PATH = BASE_DIR / ".env"
+load_dotenv(dotenv_path=ENV_PATH)
+
 logging.basicConfig(level=logging.INFO)
+logging.info("Loaded .env from %s", ENV_PATH)
+
+REQUIRED_ENV_KEYS = [
+    "EMBEDDING_PROVIDER",
+    "OPENAI_API_KEY",
+    "GOOGLE_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "SUPABASE_DB_URL",
+]
+for key in REQUIRED_ENV_KEYS:
+    logging.info("Env key %s present=%s", key, key in os.environ)
+
+ensure_directories()
 
 
 def make_safe_file_id(stem: str) -> str:

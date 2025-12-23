@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from abc import ABC, abstractmethod
-from typing import List, Optional
+from typing import List
 
 
 class EmbeddingProvider(ABC):
@@ -92,29 +92,31 @@ class AnthropicEmbeddingProvider(EmbeddingProvider):
         return list(resp.data[0].embedding)
 
 
-def get_provider_from_env() -> Optional[EmbeddingProvider]:
+def get_provider_from_env() -> EmbeddingProvider:
     """
     Select an embedding provider based on the EMBEDDING_PROVIDER env var.
 
-    EMBEDDING_PROVIDER can be one of: openai, gemini, anthropic.
-    If unset or invalid, returns None and the caller should treat this as
-    "no external embeddings configured".
+    EMBEDDING_PROVIDER can be one of: openai, gemini/google, claude/anthropic.
+    Raises RuntimeError if unset, invalid, or missing required credentials so
+    that configuration problems are never silently skipped.
     """
     provider_name = os.getenv("EMBEDDING_PROVIDER", "").strip().lower()
     if not provider_name:
-        return None
+        raise RuntimeError(
+            "EMBEDDING_PROVIDER is not set. Expected one of: "
+            "openai, gemini, google, claude, anthropic."
+        )
 
-    try:
-        if provider_name == "openai":
-            return OpenAIEmbeddingProvider()
-        if provider_name in ("gemini", "google"):
-            return GeminiEmbeddingProvider()
-        if provider_name in ("claude", "anthropic"):
-            return AnthropicEmbeddingProvider()
-    except RuntimeError:
-        # Missing credentials or misconfiguration; treat as "no provider".
-        return None
+    if provider_name == "openai":
+        return OpenAIEmbeddingProvider()
+    if provider_name in ("gemini", "google"):
+        return GeminiEmbeddingProvider()
+    if provider_name in ("claude", "anthropic"):
+        return AnthropicEmbeddingProvider()
 
-    return None
+    raise RuntimeError(
+        f"Unsupported EMBEDDING_PROVIDER='{provider_name}'. "
+        "Expected one of: openai, gemini, google, claude, anthropic."
+    )
 
 

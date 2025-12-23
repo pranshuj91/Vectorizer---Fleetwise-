@@ -12,16 +12,16 @@ def ingest_chunks_to_supabase(chunks: List[Dict[str, Any]], file_id: str, file_n
     Ingest semantic chunks into Supabase pgvector using a configured provider.
 
     - Provider is selected via EMBEDDING_PROVIDER env var.
-    - If no provider or Supabase DSN is configured, this function is a no-op.
-    - Any errors are logged but do not break the main request flow.
+    - If configuration is missing or invalid, an explicit error is logged.
+    - Supabase / provider errors do NOT crash the main request flow.
     """
     if not chunks:
         return
 
-    provider = get_provider_from_env()
-    if provider is None:
-        # No external embedding provider configured; skip ingestion.
-        logging.info("No EMBEDDING_PROVIDER configured; skipping Supabase ingestion.")
+    try:
+        provider = get_provider_from_env()
+    except Exception as exc:  # pragma: no cover - defensive
+        logging.error("Embedding provider configuration error: %s", exc)
         return
 
     records: List[Dict[str, Any]] = []
