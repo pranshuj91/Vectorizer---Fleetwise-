@@ -1,20 +1,69 @@
 # =========================
+# Runtime / Generated Data Directories
+# =========================
+data/
+storage/
+uploads/
+chunks/
+vectors/
+texts/
+raw_text/
+normalized/
+reconstructed/
+sections/
+structured/
+
+# =========================
+# Large Binary Files
+# =========================
+*.pdf
+*.PDF
+*.xlsx
+*.xls
+*.doc
+*.docx
+
+# =========================
+# Generated Data Files
+# =========================
+*.jsonl
+*.faiss
+*.txt
+*.json
+!package.json
+!package-lock.json
+!tsconfig.json
+
+# =========================
 # Environment & Secrets
 # =========================
 .env
 .env.*
 .env.local
+.env.production
+.env.development
+*.key
+*.pem
+*.cert
 
 # =========================
-# Python / Virtual Env
+# Python / Virtual Environment
 # =========================
 venv/
 .venv/
 env/
+ENV/
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+*.whl
 
 # =========================
 # IDE / Editor
@@ -22,12 +71,11 @@ __pycache__/
 .vscode/
 .idea/
 .history/
-
-# =========================
-# OS Files
-# =========================
-Thumbs.db
+*.swp
+*.swo
+*~
 .DS_Store
+Thumbs.db
 
 # =========================
 # Python Tooling
@@ -35,25 +83,75 @@ Thumbs.db
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
-
-# =========================
-# Project Generated Data
-# =========================
-storage/uploads/
-storage/raw_text/
-storage/chunks/
-storage/vectors/
-storage/*.pdf
-storage/*.json
-storage/*.txt
+.coverage
+htmlcov/
+.tox/
+.pytest_cache/
+.hypothesis/
 
 # =========================
 # Logs
 # =========================
 *.log
 logs/
+*.log.*
 
 # =========================
-# Misc
+# OS Files
+# =========================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Desktop.ini
+
+# =========================
+# Node.js (if any frontend tooling)
 # =========================
 node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# =========================
+# Temporary Files
+# =========================
+*.tmp
+*.temp
+*.bak
+*.backup
+*.swp
+*.swo
+
+# =========================
+# Jupyter Notebooks (if any)
+# =========================
+.ipynb_checkpoints/
+*.ipynb
+
+# =========================
+# Model Cache (HuggingFace, etc.)
+# =========================
+.cache/
+models/
+*.bin
+*.safetensors
+*.onnx
+
+# =========================
+# Database Files
+# =========================
+*.db
+*.sqlite
+*.sqlite3
+
+# =========================
+# Archive Files
+# =========================
+*.zip
+*.tar
+*.tar.gz
+*.rar
+*.7z
