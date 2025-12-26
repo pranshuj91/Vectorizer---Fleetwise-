@@ -1,11 +1,19 @@
+# CRITICAL: Load .env FIRST before any other imports or logic
 from pathlib import Path
 import os
+from dotenv import load_dotenv
+
+# Force-load .env using absolute path
+BASE_DIR = Path(__file__).resolve().parent
+ENV_PATH = BASE_DIR / ".env"
+load_dotenv(dotenv_path=ENV_PATH, override=True)
+
+# Now import everything else
 import uuid
 import json
 import logging
 import re
 
-from dotenv import load_dotenv
 from fastapi import FastAPI, File, UploadFile, HTTPException, Request
 from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from fastapi.templating import Jinja2Templates
@@ -18,9 +26,6 @@ from services.json_extractor import extract_json_blocks
 from services.csv_extractor import extract_csv_blocks
 from services.excel_extractor import extract_excel_blocks
 from services.vector_ingestion import ingest_chunks_to_supabase
-
-
-BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 STORAGE_DIR = BASE_DIR / "storage"
 
@@ -47,22 +52,28 @@ def ensure_directories() -> None:
         d.mkdir(parents=True, exist_ok=True)
 
 
-# Load .env from an absolute path and log basic configuration visibility.
-ENV_PATH = BASE_DIR / ".env"
-load_dotenv(dotenv_path=ENV_PATH)
-
+# Configure logging and validate critical env vars
 logging.basicConfig(level=logging.INFO)
 logging.info("Loaded .env from %s", ENV_PATH)
 
-REQUIRED_ENV_KEYS = [
-    "EMBEDDING_PROVIDER",
-    "OPENAI_API_KEY",
-    "GOOGLE_API_KEY",
-    "ANTHROPIC_API_KEY",
-    "SUPABASE_DB_URL",
-]
-for key in REQUIRED_ENV_KEYS:
-    logging.info("Env key %s present=%s", key, key in os.environ)
+# Validate Supabase credentials (fail-fast if missing)
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
+
+logging.info("SUPABASE_URL loaded=%s", SUPABASE_URL is not None and SUPABASE_URL.strip() != "")
+logging.info("SUPABASE_SERVICE_KEY loaded=%s", SUPABASE_SERVICE_KEY is not None and SUPABASE_SERVICE_KEY.strip() != "")
+
+if not SUPABASE_URL or not SUPABASE_URL.strip():
+    raise RuntimeError(
+        "SUPABASE_URL is missing or empty. "
+        f"Please set it in {ENV_PATH}"
+    )
+
+if not SUPABASE_SERVICE_KEY or not SUPABASE_SERVICE_KEY.strip():
+    raise RuntimeError(
+        "SUPABASE_SERVICE_KEY is missing or empty. "
+        f"Please set it in {ENV_PATH}"
+    )
 
 ensure_directories()
 

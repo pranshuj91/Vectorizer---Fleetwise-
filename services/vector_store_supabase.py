@@ -1,82 +1,75 @@
 from __future__ import annotations
 
+import logging
 import os
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable
 
-import psycopg2
+from supabase import create_client, Client
 
 
-def _get_connection():
+def _get_supabase_client() -> Client:
     """
-    Create a new psycopg2 connection using SUPABASE_DB_URL.
+    Create a Supabase REST API client using SUPABASE_URL and SUPABASE_SERVICE_KEY.
 
-    If the env var is missing, return None so callers can no-op gracefully.
+    Raises RuntimeError if env vars are missing or client creation fails.
+    This ensures fail-fast behavior instead of silent skipping.
     """
-    dsn = os.getenv("SUPABASE_DB_URL")
-    if not dsn:
-        return None
-    return psycopg2.connect(dsn)
+    supabase_url = os.getenv("SUPABASE_URL")
+    supabase_key = os.getenv("SUPABASE_SERVICE_KEY")
 
+    if not supabase_url or not supabase_url.strip():
+        raise RuntimeError("SUPABASE_URL is missing or empty. Cannot create Supabase client.")
 
-def _embedding_to_vector_literal(embedding: List[float]) -> str:
-    """
-    Convert a list[float] into a pgvector-compatible text literal.
+    if not supabase_key or not supabase_key.strip():
+        raise RuntimeError("SUPABASE_SERVICE_KEY is missing or empty. Cannot create Supabase client.")
 
-    Example: [0.1, 0.2] -> '[0.1,0.2]'
-    """
-    return "[" + ",".join(f"{v:.8f}" for v in embedding) + "]"
+    try:
+        return create_client(supabase_url.strip(), supabase_key.strip())
+    except Exception as exc:
+        raise RuntimeError(f"Failed to create Supabase client: {exc}") from exc
 
 
 def upsert_embeddings(records: Iterable[Dict[str, Any]]) -> None:
     """
-    Insert embeddings into a Supabase Postgres table with pgvector.
+    Insert embeddings into a Supabase table via REST API.
 
-    Expects a table with schema like:
-      CREATE TABLE IF NOT EXISTS document_embeddings (
-        id bigserial primary key,
-        file_id text,
-        chunk_id int,
-        section text,
-        content text,
-        embedding vector
-      );
+    Expects a table named 'document_embeddings' with schema:
+      - id: bigserial primary key (auto-generated)
+      - file_id: text
+      - chunk_id: integer
+      - section: text
+      - content: text
+      - embedding: vector (pgvector type)
 
-    Connection errors or configuration issues are swallowed so that the
-    main application flow continues even when Supabase is not configured.
+    Note: Supabase REST API handles pgvector types automatically when
+    inserting JSON arrays. The embedding should be a list[float].
+
+    Raises RuntimeError if Supabase client cannot be created or if upsert fails.
+    This ensures fail-fast behavior instead of silent skipping.
     """
-    conn = _get_connection()
-    if conn is None:
-        return
+    client = _get_supabase_client()  # Raises RuntimeError if env vars missing
 
-    rows: List[Tuple[Any, ...]] = []
+    rows = []
     for rec in records:
         embedding = rec.get("embedding")
-        if not embedding:
+        if not embedding or not isinstance(embedding, list):
             continue
+
         rows.append(
-            (
-                rec.get("file_id"),
-                rec.get("chunk_id"),
-                rec.get("section"),
-                rec.get("content"),
-                _embedding_to_vector_literal(embedding),
-            )
+            {
+                "file_id": rec.get("file_id"),
+                "chunk_id": rec.get("chunk_id"),
+                "section": rec.get("section"),
+                "content": rec.get("content"),
+                "embedding": embedding,  # Supabase REST API accepts list[float] directly
+            }
         )
 
     if not rows:
-        conn.close()
+        logging.info("No embedding records to upsert.")
         return
 
-    sql = """
-    INSERT INTO document_embeddings (file_id, chunk_id, section, content, embedding)
-    VALUES (%s, %s, %s, %s, %s::vector)
-    """
-
-    try:
-        with conn:
-            with conn.cursor() as cur:
-                cur.executemany(sql, rows)
-    finally:
-        conn.close()
-
+    # Use upsert to handle duplicates (match on file_id + chunk_id if you have a unique constraint)
+    response = client.table("document_embeddings").upsert(rows).execute()
+    logging.info("Upserted %d embeddings to Supabase table 'document_embeddings'", len(rows))
 
