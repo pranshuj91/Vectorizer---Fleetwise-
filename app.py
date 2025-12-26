@@ -17,6 +17,7 @@ import re
 from fastapi import FastAPI, File, UploadFile, HTTPException, Request
 from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from fastapi.templating import Jinja2Templates
+from fastapi.middleware.cors import CORSMiddleware
 
 from services.pdf_loader import save_upload_file, extract_text_from_pdf
 from services.text_reconstructor import reconstruct_text, save_reconstructed_document
@@ -93,6 +94,15 @@ def make_safe_file_id(stem: str) -> str:
 
 # max_request_size ensures Starlette will accept large uploads up to 1GB.
 app = FastAPI(title="PDF Vectorizer", max_request_size=MAX_FILE_SIZE_BYTES)
+
+# Configure CORS to allow requests from all origins
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all HTTP methods (GET, POST, PUT, DELETE, etc.)
+    allow_headers=["*"],  # Allow all headers
+)
 
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
