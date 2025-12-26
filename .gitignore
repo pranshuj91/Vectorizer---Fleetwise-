@@ -1,28 +1,59 @@
-# Python / venv
+# =========================
+# Environment & Secrets
+# =========================
+.env
+.env.*
+.env.local
+
+# =========================
+# Python / Virtual Env
+# =========================
 venv/
 .venv/
 env/
-*.pyc
 __pycache__/
+*.pyc
+*.pyo
+*.pyd
 
-# IDE / editor
+# =========================
+# IDE / Editor
+# =========================
 .vscode/
 .idea/
 .history/
 
-# OS files
+# =========================
+# OS Files
+# =========================
 Thumbs.db
 .DS_Store
 
-# Python tooling
+# =========================
+# Python Tooling
+# =========================
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
 
-# Data directories (optional to ignore large generated artifacts)
-data/uploads/
-data/texts/
-data/chunks/
-data/vectors/
+# =========================
+# Project Generated Data
+# =========================
+storage/uploads/
+storage/raw_text/
+storage/chunks/
+storage/vectors/
+storage/*.pdf
+storage/*.json
+storage/*.txt
 
+# =========================
+# Logs
+# =========================
+*.log
+logs/
 
+# =========================
+# Misc
+# =========================
+node_modules/
