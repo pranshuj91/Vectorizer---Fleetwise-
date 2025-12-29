@@ -18,6 +18,7 @@ from fastapi import FastAPI, File, UploadFile, HTTPException, Request
 from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from services.pdf_loader import save_upload_file, extract_text_from_pdf
 from services.text_reconstructor import reconstruct_text, save_reconstructed_document
@@ -27,6 +28,7 @@ from services.json_extractor import extract_json_blocks
 from services.csv_extractor import extract_csv_blocks
 from services.excel_extractor import extract_excel_blocks
 from services.vector_ingestion import ingest_chunks_to_supabase
+from services.drive_ingest import ingest_drive_folder
 DATA_DIR = BASE_DIR / "data"
 STORAGE_DIR = BASE_DIR / "storage"
 
@@ -426,6 +428,44 @@ async def preview_chunks(file_id: str, limit: int = 10):
                 break
 
     return {"file_id": file_id, "limit": limit, "chunks": results}
+
+
+class DriveIngestRequest(BaseModel):
+    folder_id: str
+
+
+@app.post("/ingest/drive")
+async def ingest_google_drive(request: DriveIngestRequest):
+    """
+    Ingest all PDFs from a Google Drive folder into the pipeline.
+
+    This endpoint:
+    1. Recursively lists all PDFs in the specified folder
+    2. Checks each PDF against the processed_files table
+    3. Processes only new PDFs (rejects duplicates)
+    4. Runs them through the full pipeline (extraction → chunking → embedding → Supabase)
+    5. Marks successfully processed files as done
+
+    :param request: JSON body with folder_id field.
+                    folder_id can be extracted from: drive.google.com/drive/folders/{folder_id}
+    :return: Summary with counts of processed, rejected, and failed files.
+    """
+    folder_id = request.folder_id.strip() if request.folder_id else ""
+    if not folder_id:
+        raise HTTPException(status_code=400, detail="folder_id is required.")
+
+    try:
+        result = ingest_drive_folder(
+            folder_id=folder_id,
+            base_dir=BASE_DIR,
+            embedding_service=embedding_service,
+        )
+        return JSONResponse(result)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except Exception as exc:
+        logging.error("Google Drive ingestion failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Ingestion failed: {exc}") from exc
 
 
 if __name__ == "__main__":  # pragma: no cover

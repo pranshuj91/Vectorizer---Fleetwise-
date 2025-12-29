@@ -178,6 +178,55 @@
             color: #a5b4fc;
             font-size: 0.8rem;
         }
+        .source-selector {
+            margin-bottom: 20px;
+            display: flex;
+            gap: 16px;
+            align-items: center;
+        }
+        .source-selector label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            color: #e5e7eb;
+        }
+        .source-selector input[type="radio"] {
+            cursor: pointer;
+        }
+        .drive-input-section {
+            display: none;
+            margin-top: 16px;
+        }
+        .drive-input-section.active {
+            display: block;
+        }
+        .drive-input-section input[type="text"] {
+            width: 100%;
+            padding: 10px 12px;
+            border-radius: 10px;
+            border: 1px solid #1e293b;
+            background: #020617;
+            color: #e5e7eb;
+            font-size: 0.9rem;
+            margin-bottom: 12px;
+        }
+        .drive-input-section button {
+            width: 100%;
+            padding: 10px 16px;
+            border-radius: 999px;
+            border: none;
+            background: #2563eb;
+            color: #ecfdf5;
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 0.95rem;
+        }
+        .drive-input-section button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
     </style>
 </head>
 <body>
@@ -185,13 +234,28 @@
         <h1>PDF Vectorizer</h1>
         <p class="subtitle">Upload a PDF, JSON, CSV, or Excel file (max 1GB). The server will extract text, build embeddings, and store vectors for search.</p>
 
+        <div class="source-selector">
+            <label>
+                <input type="radio" name="source" value="upload" checked />
+                <span>Upload File</span>
+            </label>
+            <label>
+                <input type="radio" name="source" value="drive" />
+                <span>Google Drive</span>
+            </label>
+        </div>
+
         <form id="upload-form">
-            <div class="upload-area">
+            <div class="upload-area" id="upload-area">
                 <label class="upload-label" for="file-input">
                     <span>Select a file</span>
                 </label>
                 <input id="file-input" type="file" name="file" accept=".pdf,.json,.csv,.xls,.xlsx" />
                 <div class="file-name" id="file-name">No file selected</div>
+            </div>
+            <div class="drive-input-section" id="drive-section">
+                <input type="text" id="drive-folder-input" placeholder="Google Drive Folder Link or ID (e.g., https://drive.google.com/drive/folders/1a2b3c... or just 1a2b3c...)" />
+                <button type="button" id="drive-ingest-btn">Ingest from Drive</button>
             </div>
             <button type="submit" id="upload-btn" disabled>Upload &amp; Process PDF</button>
 
@@ -229,6 +293,11 @@
         const btnDownloadText = document.getElementById("btn-download-text");
         const btnDownloadChunks = document.getElementById("btn-download-chunks");
         const uploadForm = document.getElementById("upload-form");
+        const uploadArea = document.getElementById("upload-area");
+        const driveSection = document.getElementById("drive-section");
+        const driveFolderInput = document.getElementById("drive-folder-input");
+        const driveIngestBtn = document.getElementById("drive-ingest-btn");
+        const sourceRadios = document.querySelectorAll('input[name="source"]');
 
         const searchInput = document.getElementById("search-query");
         const searchBtn = document.getElementById("search-btn");
@@ -237,6 +306,38 @@
         let currentFileId = null;
         let rawDownloadUrl = null;
         let chunksDownloadUrl = null;
+
+        function extractFolderId(input) {
+            const text = input.trim();
+            if (!text) return null;
+            
+            const folderIdMatch = text.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+            if (folderIdMatch) {
+                return folderIdMatch[1];
+            }
+            
+            if (/^[a-zA-Z0-9_-]+$/.test(text)) {
+                return text;
+            }
+            
+            return null;
+        }
+
+        sourceRadios.forEach(radio => {
+            radio.addEventListener("change", () => {
+                const isUpload = radio.value === "upload";
+                uploadArea.style.display = isUpload ? "block" : "none";
+                driveSection.classList.toggle("active", !isUpload);
+                uploadBtn.style.display = isUpload ? "block" : "none";
+                driveIngestBtn.disabled = false;
+                
+                if (!isUpload) {
+                    fileInput.value = "";
+                    fileNameEl.textContent = "No file selected";
+                    uploadBtn.disabled = true;
+                }
+            });
+        });
 
         fileInput.addEventListener("change", () => {
             if (fileInput.files.length > 0) {
@@ -251,6 +352,8 @@
 
         uploadForm.addEventListener("submit", (e) => {
             e.preventDefault();
+            const selectedSource = document.querySelector('input[name="source"]:checked').value;
+            if (selectedSource !== "upload") return;
             if (!fileInput.files.length) return;
 
             const file = fileInput.files[0];
@@ -355,6 +458,63 @@
             if (!chunksDownloadUrl) return;
             console.log("Opening chunks download URL:", chunksDownloadUrl);
             window.open(chunksDownloadUrl, "_blank");
+        });
+
+        driveIngestBtn.addEventListener("click", () => {
+            const folderId = extractFolderId(driveFolderInput.value);
+            if (!folderId) {
+                statusEl.textContent = "Invalid folder ID or link. Please provide a valid Google Drive folder ID or full URL.";
+                statusEl.className = "status error";
+                return;
+            }
+
+            statusEl.textContent = "Starting Google Drive ingestion...";
+            statusEl.className = "status";
+            metaEl.textContent = "";
+            downloadsEl.style.display = "none";
+            progressInner.style.width = "0%";
+            driveIngestBtn.disabled = true;
+
+            fetch("/ingest/drive", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ folder_id: folderId }),
+            })
+                .then((res) => res.json())
+                .then((data) => {
+                    driveIngestBtn.disabled = false;
+                    if (data.total_pdfs !== undefined) {
+                        const processed = data.processed || 0;
+                        const rejected = data.rejected || 0;
+                        const failed = data.failed || 0;
+                        
+                        statusEl.textContent = `Ingestion started. Processing ${data.total_pdfs} PDF(s)...`;
+                        statusEl.className = "status success";
+                        metaEl.textContent = `Total: ${data.total_pdfs} | Processed: ${processed} | Rejected: ${rejected} | Failed: ${failed}`;
+                        
+                        if (data.processed_files && data.processed_files.length > 0) {
+                            const filesList = data.processed_files.map(f => f.file_name).join(", ");
+                            metaEl.textContent += ` | Files: ${filesList}`;
+                        }
+                        
+                        if (rejected > 0 && data.rejected_files) {
+                            metaEl.textContent += ` | Rejected: ${data.rejected_files.join(", ")}`;
+                        }
+                    } else if (data.detail) {
+                        statusEl.textContent = data.detail;
+                        statusEl.className = "status error";
+                    } else {
+                        statusEl.textContent = "Ingestion request sent successfully.";
+                        statusEl.className = "status success";
+                    }
+                })
+                .catch((err) => {
+                    driveIngestBtn.disabled = false;
+                    statusEl.textContent = `Ingestion failed: ${err.message || "Network error"}`;
+                    statusEl.className = "status error";
+                });
         });
 
         searchBtn.addEventListener("click", () => {
